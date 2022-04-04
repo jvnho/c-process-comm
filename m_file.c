@@ -91,17 +91,15 @@ MESSAGE *m_connexion(const char *nom, int options, size_t nb_msg, size_t len_max
     size_t taille_file = sizeof(FILE_MSG) + (sizeof(char) * nb_msg * len_max);
     if(ftruncate(nom, taille_file == -1)) return NULL;
 
-    FILE_MSG *file = malloc(taille_file);
-    if(file == NULL) return NULL;
+    FILE_MSG *file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE,
+                          MAP_SHARED, fd, 0);
+    if((void *) file == MAP_FAILED) return NULL;
     memset(file, 0, taille_file);
     if(initialiser_mutex(&file->mutex) != 0) return NULL;
     file->len_max = len_max;
     file->nb_msg = nb_msg;
     file->first = -1;
     file->msg = initialize_array(nb_msg, len_max);
-    FILE_MSG *file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE,
-                          MAP_SHARED, fd, 0);
-    if((void *) file == MAP_FAILED) return NULL;
 
     MESSAGE *message = malloc(sizeof(MESSAGE));
     if(message == NULL) return NULL;
