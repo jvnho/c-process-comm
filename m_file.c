@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdarg.h>
+#include <errno.h>
 #include "m_file.h"
 
 int initialiser_mutex(pthread_mutex_t *pmutex){
@@ -19,6 +20,17 @@ int initialiser_mutex(pthread_mutex_t *pmutex){
         return code;
     code = pthread_mutex_init(pmutex, &mutexattr);
     return code;
+}
+
+int initialiser_cond(pthread_cond_t *pcond){
+  pthread_condattr_t condattr;
+  int code;
+  if( ( code = pthread_condattr_init(&condattr) ) != 0 )
+    return code;
+  if( ( code = pthread_condattr_setpshared(&condattr,PTHREAD_PROCESS_SHARED) ) != 0 )
+    return code;
+  code = pthread_cond_init(pcond, &condattr) ;
+  return code;
 }
 
 /**
@@ -93,6 +105,7 @@ MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, siz
         if((void *) file == MAP_FAILED) return NULL;
         memset(file, 0, taille_file);
         if(initialiser_mutex(&file->mutex) != 0) return NULL;
+        if(initialiser_cond(&file->rcond) != 0) return NULL;
         file->len_max = len_max;
         file->nb_msg = nb_msg;
         file->first = -1;
@@ -116,5 +129,32 @@ int m_deconnexion(MESSAGE *file){
     if (close(file ->fd) == -1) return -1;
     file->file->connecte--;
     free(file);
+    return 0;
+}
+
+int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag){
+    if (len > file->file->len_max){
+        errno = EMSGSIZE;
+        return -1;
+    }
+    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
+    int *first = &file->file->first;
+    int *last = &file->file->last;
+    if (*first == *last){ // SI C'EST PLEIN
+        if (msgflag == O_NONBLOCK){
+            pthread_mutex_unlock(&file->file->mutex);
+            errno = EAGAIN;
+            return -1;
+        }
+        if (msgflag == 0){
+            while (*first = *last){
+                if( pthread_cond_wait( &file->file->rcond, &file->file->mutex) > 0 ) return -1;
+            }
+        }
+        else return -1;
+    }
+    memcpy(file->file->msg[*last], msg, len);
+    *last = *last == file->file->nb_msg ? 0 : (*last)++;
+    if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     return 0;
 }
