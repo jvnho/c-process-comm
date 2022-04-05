@@ -3,12 +3,6 @@
 #ifndef M_FILE
 #define M_FILE
 
-typedef struct {
-    int flags;
-    int fd;
-    FILE_MSG *file;
-} MESSAGE;
-
 typedef struct
 {
     pthread_mutex_t mutex;
@@ -19,6 +13,12 @@ typedef struct
     int connecte; // nombre de processus connecté à la file
     char **msg; // file de messages
 } FILE_MSG;
+
+typedef struct {
+    int flags;
+    int fd;
+    FILE_MSG *file;
+} MESSAGE;
 
 int m_deconnexion(MESSAGE *file);
 MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
