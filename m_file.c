@@ -64,7 +64,7 @@ MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, siz
         file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
         if((void *) file == MAP_FAILED) return NULL;
     }
-    else 
+    else
     {
         //cas où l'utilisateur veut créer et se connecter à une nouvelle file
         size_t nb_msg;
@@ -107,8 +107,14 @@ MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, siz
     return m;
 }
 
+/**
+ * @brief Déconnecte la file de message.
+ * @param file file de message à déconnecter.
+ * @return 0 si 0, -1 en cas d'erreur.
+ */
 int m_deconnexion(MESSAGE *file){
-    if (close(file ->fd) == -1) return -1 ;
+    if (close(file ->fd) == -1) return -1;
+    file->file->connecte--;
     free(file);
     return 0;
 }
