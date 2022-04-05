@@ -6,7 +6,7 @@
 typedef struct {
     int flags;
     int fd;
-    int *file;
+    FILE_MSG *file;
 } MESSAGE;
 
 typedef struct
@@ -21,5 +21,5 @@ typedef struct
 } FILE_MSG;
 
 int m_deconnexion(MESSAGE *file);
-
+MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
 #endif
