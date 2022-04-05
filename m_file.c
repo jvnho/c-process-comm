@@ -52,6 +52,25 @@ char **initialize_array(size_t nb_msg, size_t len_msg)
     return ret;
 }
 
+size_t m_message_len(MESSAGE *message)
+{
+    return message->file->len_max;
+}
+size_t m_capacite(MESSAGE *message)
+{
+    return message->file->nb_msg;
+}
+size_t m_nb(MESSAGE *message)
+{
+    int first = message->file->first;
+    int last = message->file->last;
+    int capacite = m_capacite(message);
+    if(first == -1) return 0;
+    if(first == last) return capacite;
+    if(first < last) return last - first + 1; //first,first+1,...,last-1
+    return capacite - first - last + 1; //first,first+1,...,n-1,0,1,...,last-1
+}
+
 /**
  * @brief Crée une nouvelle file de message et renvoie un pointeur
  * vers un object MESSAGE vers cette file
