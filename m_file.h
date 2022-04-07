@@ -27,7 +27,7 @@ typedef struct
     int first;
     int last;
     int connecte; // nombre de processus connecté à la file
-    char **msg; // file de messages
+    mon_message msgs[]; //file de messages
 } FILE_MSG;
 
 typedef struct {

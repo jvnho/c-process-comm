@@ -24,25 +24,6 @@ int initialiser_cond(pthread_cond_t *pcond){
   return code;
 }
 
-/**
- * @brief Initialise un tableaux de pointeurs de pointeurs
- * @param nb_msg taille du tableau
- * @param len_msg taille maximale des chaînes de caractères du tableau
- * @return char**
- */
-char **initialize_array(size_t nb_msg, size_t len_msg)
-{
-    char **ret = malloc(sizeof(char*) * nb_msg);
-    if(ret == NULL) return NULL;
-    for(size_t i = 0; i < nb_msg; i++)
-    {
-        ret[i] = malloc(sizeof(char) * len_msg);
-        if(ret[i] == NULL) return NULL;
-        memset(ret[i], 0, sizeof(char) * len_msg);
-    }
-    return ret;
-}
-
 size_t m_message_len(MESSAGE *message)
 {
     return message->file->len_max;
@@ -102,7 +83,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         }
         fd = shm_open(nom, options, mode);
         if(fd == -1)  return NULL;
-        size_t taille_file = sizeof(FILE_MSG) + (sizeof(char) * nb_msg * len_max);
+        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
         if(ftruncate(fd, taille_file) == -1) return NULL;
         file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
         if((void *) file == MAP_FAILED) return NULL;
@@ -112,7 +93,6 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         file->len_max = len_max;
         file->nb_msg = nb_msg;
         file->first = -1;
-        file->msg = initialize_array(nb_msg, len_max);
     }
     else
     {
@@ -166,7 +146,7 @@ int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag){
         }
         else return -1;
     }
-    memcpy(file->file->msg[*last], msg, len);
+    memcpy(&file->file->msgs[*last], msg, len);
     *last = *last == file->file->nb_msg ? 0 : (*last)++;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     return 0;
