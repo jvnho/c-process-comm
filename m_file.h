@@ -1,7 +1,22 @@
 #include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <sys/types.h>
 
 #ifndef M_FILE
 #define M_FILE
+
+typedef struct{
+    long type;
+    char mtext[];
+} mon_message;
 
 typedef struct
 {
@@ -21,13 +36,8 @@ typedef struct {
     FILE_MSG *file;
 } MESSAGE;
 
-typedef struct{
-    long type;
-    char mtext[];
-} mon_message;
-
 int m_deconnexion(MESSAGE *file);
-MESSAGE *m_connexion(const char *nom, int options, const char *format,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
+MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
 int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag);
 
 #endif

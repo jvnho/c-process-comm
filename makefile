@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Wall -g -pedantic
 LDFLAGS=-pthread -lrt
 
-all:main clean
+all:clean main 
 
 main: m_file.o
 	$(CC) $(CFLAGS) main.c -o main m_file.o $(LDFLAGS)
