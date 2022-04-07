@@ -146,8 +146,69 @@ int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag){
         }
         else return -1;
     }
-    memcpy(&file->file->msgs[*last], msg, len);
+    memcpy(&file->file->messages[*last], msg, len);
     *last = *last == file->file->nb_msg ? 0 : (*last)++;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     return 0;
+}
+
+
+ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
+{
+    if(len < m_message_len(file))
+    {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
+    if(m_nb(file) == 0)
+    {
+        if(flags == O_NONBLOCK)
+        {
+            pthread_mutex_unlock(&file->file->mutex);
+            errno = EAGAIN;
+            return -1;
+        }
+        else if(flags == 0)
+        {
+            while (m_nb(file) == 0){
+                if( pthread_cond_wait( &file->file->rcond, &file->file->mutex) > 0 ) return -1;
+            }
+        }
+        else return -1;
+    }
+    int *first = &file->file->first;
+    int *last = &file->file->last;
+    int idxsrc = 0;
+    if(type == 0)
+    {
+        idxsrc = *first;
+        *first = *first == file->file->nb_msg ? 0 : (*first)++;
+        if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+    }
+    else
+    {  
+        int i;
+        int found = 0;
+        for(i = *first; i != *last & found == 0; i = (i+1)%m_capacite(file))
+        {
+            if((type > 0 && file->file->messages[i].type == type) 
+                || (type < 0 && file->file->messages[i].type <= abs(type)))
+            {
+                found = 1;
+                idxsrc = i;
+            }
+            if(found == 1)
+            {
+                if(idxsrc != *first)
+                {
+                    //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
+                }
+                *first = *first == file->file->nb_msg ? 0 : (*first)++;
+                if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+            }
+        }
+    }
+    memcpy(msg, file->file->messages[idxsrc].mtext, file->file->len_max);
+    return strlen(msg);
 }
