@@ -57,9 +57,6 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
 {
     int fd; // descripteur du fichier de mémoire partagée
     FILE_MSG *file; // file de messages
-    char fd_addrname[strlen(nom)+strlen("_addr")];
-    strcpy(fd_addrname, nom);
-    strcat(fd_addrname,"_addr");
     if(O_CREAT & options)
     {
         //cas où l'utilisateur veut créer et se connecter à une nouvelle file
@@ -92,22 +89,10 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         if(ftruncate(fd, taille_file) == -1){
             return NULL;
         }
-        int fd_addr = shm_open(fd_addrname, options, mode);
-        if(fd_addr == -1){
-            return NULL;
-        }
-        if(ftruncate(fd_addr, sizeof(FILE_MSG*)) == -1){
-            return NULL;
-        }
         file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
         if((void *) file == MAP_FAILED){
             return NULL;
         }
-        FILE_MSG **addr = mmap(NULL, sizeof(FILE_MSG*), PROT_READ|PROT_WRITE, MAP_SHARED, fd_addr, 0);
-        if((void **) addr == MAP_FAILED){
-            return NULL;
-        }
-        *addr = file;
         memset(file, 0, taille_file);
         if(initialiser_mutex(&file->mutex) != 0){
             return NULL;
@@ -118,6 +103,12 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         file->len_max = len_max;
         file->nb_msg = nb_msg;
         file->first = -1;
+        //file->messages = file+sizeof(FILE_MSG); //core dump
+        file->messages = &file->connecte+sizeof(int);
+        printf("%p\n", file->messages);
+        char *txt = "7070";
+        strcpy(file->messages[file->last].mtext, txt);
+        printf("%s\n", file->messages[file->last].mtext);
     }
     else
     {
@@ -126,19 +117,11 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         if(fd == -1){
             return NULL;
         }
-        int fd_addr = shm_open(fd_addrname, O_RDONLY, 0000);
-        if(fd_addr == -1){
-            return NULL;
-        }
-        FILE_MSG **addr = mmap(NULL, sizeof(FILE_MSG*), PROT_READ|PROT_WRITE, MAP_PRIVATE, fd_addr, 0);
-        if((void **) addr == MAP_FAILED){
-            return NULL;
-        }
         struct stat statbuf;
         if(fstat(fd, &statbuf) == -1){
             return NULL;
         }
-        file = mmap(*addr, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_FIXED | MAP_SHARED, fd, 0);
+        file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
         if((void *) file == MAP_FAILED){
             return NULL;
         }
