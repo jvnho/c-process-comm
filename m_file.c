@@ -90,6 +90,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         memset(file, 0, taille_file);
         if(initialiser_mutex(&file->mutex) != 0) return NULL;
         if(initialiser_cond(&file->rcond) != 0) return NULL;
+        if(initialiser_cond(&file->wcond) != 0) return NULL;
         file->len_max = len_max;
         file->nb_msg = nb_msg;
         file->first = -1;
@@ -125,29 +126,34 @@ int m_deconnexion(MESSAGE *file){
     return 0;
 }
 
-int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag){
+int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     if (len > file->file->len_max){
         errno = EMSGSIZE;
         return -1;
     }
-    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     int *first = &file->file->first;
     int *last = &file->file->last;
+    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     if (*first == *last){ // SI C'EST PLEIN
-        if (msgflag == O_NONBLOCK){
+        if (msgflag !=  0){
             pthread_mutex_unlock(&file->file->mutex);
-            errno = EAGAIN;
+            if (msgflag == O_NONBLOCK) errno = EAGAIN;
             return -1;
         }
-        if (msgflag == 0){
-            while (*first = *last){
-                if( pthread_cond_wait( &file->file->rcond, &file->file->mutex) > 0 ) return -1;
+        else{
+            while (*first == *last){
+                if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
             }
         }
-        else return -1;
     }
-    memcpy(&file->file->msgs[*last], msg, len);
-    *last = *last == file->file->nb_msg ? 0 : (*last)++;
+    int l = *last;
+    *last = *last == file->file->nb_msg ? 0 : (*last) + 1;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+    char *msgs = (char *)&file->file[1];
+    char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max )*l];
+    memset(mes_addr, 0, sizeof(long) + file->file->len_max);
+    memcpy(mes_addr, msg, len+sizeof(long));
+    if (*first == -1) (*first)++;
+    printf("%d %d\n",*first, *last);
     return 0;
 }
