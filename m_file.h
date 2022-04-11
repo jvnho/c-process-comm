@@ -22,6 +22,7 @@ typedef struct
 {
     pthread_mutex_t mutex;
     pthread_cond_t rcond;
+    pthread_cond_t wcond;
     size_t len_max; // taille maximale des messages de la file
     size_t nb_msg; // nombre de messages que la file peut stocker
     int first;
@@ -38,6 +39,6 @@ typedef struct {
 
 int m_deconnexion(MESSAGE *file);
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
-int m_envoie(MESSAGE *file, const void *msg, size_t len, int msgflag);
+int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag);
 
 #endif
