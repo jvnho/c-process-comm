@@ -165,7 +165,7 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         }
     }
     int l = *last;
-    *last = *last == file->file->nb_msg ? 0 : (*last) + 1;
+    *last = *last == file->file->nb_msg-1 ? 0 : (*last) + 1;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max )*l];
@@ -202,18 +202,18 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
     }
     int *first = &file->file->first;
     int *last = &file->file->last;
-    int idxsrc = 0;
+    int idxsrc = -1;
     if(type == 0)
     {
         idxsrc = *first;
-        *first = *first == file->file->nb_msg ? 0 : (*first)++;
+        *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
         if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     }
     else
     {  
         int i;
         int found = 0;
-        for(i = *first; i != *last & found == 0; i = (i+1)%m_capacite(file))
+        for(i = *first; i != *last && found == 0; i = (i+1)%m_capacite(file))
         {
             if((type > 0 && file->file->messages[i].type == type) 
                 || (type < 0 && file->file->messages[i].type <= abs(type)))
@@ -227,11 +227,20 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
                 {
                     //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
                 }
-                *first = *first == file->file->nb_msg ? 0 : (*first)++;
+                *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
                 if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
             }
         }
     }
-    memcpy(msg, file->file->messages[idxsrc].mtext, file->file->len_max);
-    return strlen(msg);
+    if(idxsrc == -1)
+    {
+        return 0;
+    }
+    else
+    {
+        char *msgs = (char *)&file->file[1];
+        char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idxsrc];
+        memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
+        return strlen(msg);
+    }
 }

@@ -40,5 +40,9 @@ typedef struct {
 int m_deconnexion(MESSAGE *file);
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag);
+ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags);
+size_t m_message_len(MESSAGE *message);
+size_t m_capacite(MESSAGE *message);
+size_t m_nb(MESSAGE *message);
 
 #endif
