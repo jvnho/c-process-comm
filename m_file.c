@@ -1,5 +1,7 @@
 #include "m_file.h"
 
+#define SIZE_BLOCK sizeof(mon_message)+file->file->len_max
+
 int initialiser_mutex(pthread_mutex_t *pmutex){
     pthread_mutexattr_t mutexattr;
     int code;
@@ -40,7 +42,7 @@ size_t m_nb(MESSAGE *message)
     if(first == -1) return 0;
     if(first == last) return capacite;
     if(first < last) return last - first + 1; //first,first+1,...,last-1
-    return capacite - first - last + 1; //first,first+1,...,n-1,0,1,...,last-1
+    return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
 }
 
 /**
@@ -166,14 +168,42 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     }
     int l = *last;
     *last = *last == file->file->nb_msg-1 ? 0 : (*last) + 1;
+    if (*first == -1) (*first)++;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max )*l];
     memset(mes_addr, 0, sizeof(long) + file->file->len_max);
     memcpy(mes_addr, msg, len+sizeof(long));
-    if (*first == -1) (*first)++;
+    pthread_cond_signal(&file->file->rcond);
     printf("%d %d\n",*first, *last);
     return 0;
+}
+
+size_t m_readmsg(MESSAGE *file, void *msg, int idx)
+{
+    char *msgs = (char *)&file->file[1];
+    char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idx];
+    memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
+    memset(mes_addr, 0, file->file->len_max+sizeof(long)); // supprime le message de la file
+    return strlen(msg);
+}
+
+size_t shiftblock(MESSAGE *file, int idx)
+{
+    int first = file->file->first;
+    int last = file->file->last;
+    if(first <= last)
+    {
+        char *msgs = (char *)&file->file[1];
+        char *debut = &msgs[SIZE_BLOCK*first];
+        char *fin = &debut[SIZE_BLOCK*(idx-1)];
+        size_t size = SIZE_BLOCK * (idx - first);
+        memcpy(debut+SIZE_BLOCK,fin-debut,size);
+    }
+    else //first > last
+    {
+
+    }
 }
 
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
@@ -188,7 +218,7 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
     {
         if(flags == O_NONBLOCK)
         {
-            pthread_mutex_unlock(&file->file->mutex);
+            if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
             errno = EAGAIN;
             return -1;
         }
@@ -208,39 +238,37 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
         idxsrc = *first;
         *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
         if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+        pthread_cond_signal(&file->file->wcond);
+        return m_readmsg(file, msg, idxsrc);
     }
     else
-    {  
-        int i;
+    {
         int found = 0;
-        for(i = *first; i != *last && found == 0; i = (i+1)%m_capacite(file))
+        for(int i = *first; i != *last && found == 0; i = (i+1)%m_capacite(file))
         {
-            if((type > 0 && file->file->messages[i].type == type) 
+            if((type > 0 && file->file->messages[i].type == type)
                 || (type < 0 && file->file->messages[i].type <= abs(type)))
             {
                 found = 1;
                 idxsrc = i;
             }
-            if(found == 1)
-            {
-                if(idxsrc != *first)
-                {
-                    //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-                }
-                *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
-                if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-            }
         }
-    }
-    if(idxsrc == -1)
-    {
-        return 0;
-    }
-    else
-    {
-        char *msgs = (char *)&file->file[1];
-        char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idxsrc];
-        memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
-        return strlen(msg);
+        if(found == 1)
+        {
+            int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
+            if(idxsrc != *first)
+            {
+                //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
+                shiftblock(file, idxsrc);
+            }
+            if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+            pthread_cond_signal(&file->file->wcond);
+            return n;
+        }
+        else
+        {
+            if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+            return 0;
+        }
     }
 }
