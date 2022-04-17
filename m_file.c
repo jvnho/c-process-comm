@@ -1,7 +1,5 @@
 #include "m_file.h"
 
-#define SIZE_BLOCK sizeof(mon_message)+file->file->len_max
-
 int initialiser_mutex(pthread_mutex_t *pmutex){
     pthread_mutexattr_t mutexattr;
     int code;
@@ -45,6 +43,28 @@ size_t m_nb(MESSAGE *message)
     return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
 }
 
+int m_init_file(FILE_MSG *file, int fd, int flags ,size_t taille_file, size_t nb_msg, size_t len_max)
+{
+    file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, flags, fd, 0);
+    if((void *) file == MAP_FAILED){
+        return 0;
+    }
+    memset(file, 0, taille_file);
+    if(initialiser_mutex(&file->mutex) != 0){
+        return 0;
+    }
+    if(initialiser_cond(&file->rcond) != 0){
+        return 0;
+    }
+    if(initialiser_cond(&file->wcond) != 0){
+        return 0;
+    }
+    file->len_max = len_max;
+    file->nb_msg = nb_msg;
+    file->first = -1;
+    return 1;
+}
+
 /**
  * @brief Crée une nouvelle file de message et renvoie un pointeur
  * vers un object MESSAGE vers cette file
@@ -59,70 +79,80 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
 {
     int fd; // descripteur du fichier de mémoire partagée
     FILE_MSG *file; // file de messages
-    if(O_CREAT & options)
+    if(nom == NULL)
     {
-        //cas où l'utilisateur veut créer et se connecter à une nouvelle file
+        //file anonyme
         size_t nb_msg;
         size_t len_max;
-        mode_t mode;
         va_list args;
         va_start(args, options);
-        for(int i = 0; i < 3; i++)
+        for(int i = 0; i < 2; i++)
         {
             if(i == 0) nb_msg = va_arg(args, size_t);
             if(i == 1) len_max = va_arg(args, size_t);
-            if(i == 2) mode = va_arg(args, mode_t);
         }
         va_end(args);
-        if(O_EXCL & options)
-        {
-            // cas où l'utilisateur a spécifié le flag O_EXCL on doit vérifier que le fichier n'existait pas
-            struct stat statbuf;
-            char path[strlen("/dev/shm")+strlen(nom)]; 
-            strcpy(path, "/dev/shm");
-            strcat(path, nom);
-            if(stat(path, &statbuf) == 0) return NULL;
-        }
-        fd = shm_open(nom, options, mode);
-        if(fd == -1){
-            return NULL;
-        }
         size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
-        if(ftruncate(fd, taille_file) == -1){
+        int flags = MAP_ANONYMOUS | MAP_SHARED;
+        if(!m_init_file(file, -1, flags, taille_file, nb_msg, len_max)){
             return NULL;
         }
-        file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-        if((void *) file == MAP_FAILED){
-            return NULL;
-        }
-        memset(file, 0, taille_file);
-        if(initialiser_mutex(&file->mutex) != 0){
-            return NULL;
-        }
-        if(initialiser_cond(&file->rcond) != 0){
-            return NULL;
-        }
-        if(initialiser_cond(&file->wcond) != 0){
-            return NULL;
-        }
-        file->len_max = len_max;
-        file->nb_msg = nb_msg;
-        file->first = -1;
+        options = O_RDWR;
     }
     else
     {
-        //cas où l'utilisateur veut se connecter à une file existante
-        fd = shm_open(nom, options, 0000);
-        if(fd == -1){
-            return NULL;
+        if(O_CREAT & options)
+        {
+            //cas où l'utilisateur veut créer et se connecter à une nouvelle file
+            size_t nb_msg;
+            size_t len_max;
+            mode_t mode;
+            va_list args;
+            va_start(args, options);
+            for(int i = 0; i < 3; i++)
+            {
+                if(i == 0) nb_msg = va_arg(args, size_t);
+                if(i == 1) len_max = va_arg(args, size_t);
+                if(i == 2) mode = va_arg(args, mode_t);
+            }
+            va_end(args);
+            if(O_EXCL & options)
+            {
+                // cas où l'utilisateur a spécifié le flag O_EXCL on doit vérifier que le fichier n'existait pas
+                struct stat statbuf;
+                char path[strlen("/dev/shm")+strlen(nom)];
+                strcpy(path, "/dev/shm");
+                strcat(path, nom);
+                if(stat(path, &statbuf) == 0) return NULL;
+            }
+            fd = shm_open(nom, options, mode);
+            if(fd == -1){
+                return NULL;
+            }
+            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
+            if(ftruncate(fd, taille_file) == -1){
+                return NULL;
+            }
+            int flags = MAP_SHARED;
+            if(!m_init_file(file, fd, flags, taille_file, nb_msg, len_max)){
+                return NULL;
+            }
         }
-        struct stat statbuf;
-        if(fstat(fd, &statbuf) == -1){
-            return NULL;
-        }
-        file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-        if((void *) file == MAP_FAILED){
-            return NULL;
+        else
+        {
+            //cas où l'utilisateur veut se connecter à une file existante
+            fd = shm_open(nom, options, 0000);
+            if(fd == -1){
+                return NULL;
+            }
+            struct stat statbuf;
+            if(fstat(fd, &statbuf) == -1){
+                return NULL;
+            }
+            file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+            if((void *) file == MAP_FAILED){
+                return NULL;
+            }
         }
     }
     MESSAGE *m = malloc(sizeof(MESSAGE));
@@ -154,6 +184,9 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     int *first = &file->file->first;
     int *last = &file->file->last;
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
+    int l = *last;
+    *last = *last == file->file->nb_msg-1 ? 0 : (*last) + 1;
+    if (*first == -1) (*first)++;
     if (*first == *last){ // SI C'EST PLEIN
         if (msgflag !=  0){
             pthread_mutex_unlock(&file->file->mutex);
@@ -166,9 +199,6 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
             }
         }
     }
-    int l = *last;
-    *last = *last == file->file->nb_msg-1 ? 0 : (*last) + 1;
-    if (*first == -1) (*first)++;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max )*l];
@@ -190,20 +220,7 @@ size_t m_readmsg(MESSAGE *file, void *msg, int idx)
 
 size_t shiftblock(MESSAGE *file, int idx)
 {
-    int first = file->file->first;
-    int last = file->file->last;
-    if(first <= last)
-    {
-        char *msgs = (char *)&file->file[1];
-        char *debut = &msgs[SIZE_BLOCK*first];
-        char *fin = &debut[SIZE_BLOCK*(idx-1)];
-        size_t size = SIZE_BLOCK * (idx - first);
-        memcpy(debut+SIZE_BLOCK,fin-debut,size);
-    }
-    else //first > last
-    {
 
-    }
 }
 
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
