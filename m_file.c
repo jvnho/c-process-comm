@@ -220,7 +220,7 @@ size_t m_readmsg(MESSAGE *file, void *msg, int idx)
 
 size_t shiftblock(MESSAGE *file, int idx)
 {
-
+    printf("shift\n");
 }
 
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
