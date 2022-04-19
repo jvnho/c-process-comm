@@ -43,25 +43,25 @@ size_t m_nb(MESSAGE *message)
     return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
 }
 
-int m_init_file(FILE_MSG *file, int fd, int flags ,size_t taille_file, size_t nb_msg, size_t len_max)
+int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t nb_msg, size_t len_max)
 {
-    file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, flags, fd, 0);
-    if((void *) file == MAP_FAILED){
+    *file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, flags, fd, 0);
+    if((void *) (*file) == MAP_FAILED){
         return 0;
     }
-    memset(file, 0, taille_file);
-    if(initialiser_mutex(&file->mutex) != 0){
+    memset(*file, 0, taille_file);
+    if(initialiser_mutex(&(*file)->mutex) != 0){
         return 0;
     }
-    if(initialiser_cond(&file->rcond) != 0){
+    if(initialiser_cond(&(*file)->rcond) != 0){
         return 0;
     }
-    if(initialiser_cond(&file->wcond) != 0){
+    if(initialiser_cond(&(*file)->wcond) != 0){
         return 0;
     }
-    file->len_max = len_max;
-    file->nb_msg = nb_msg;
-    file->first = -1;
+    (*file)->len_max = len_max;
+    (*file)->nb_msg = nb_msg;
+    (*file)->first = -1;
     return 1;
 }
 
@@ -94,7 +94,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         va_end(args);
         size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
         int flags = MAP_ANONYMOUS | MAP_SHARED;
-        if(!m_init_file(file, -1, flags, taille_file, nb_msg, len_max)){
+        if(!m_init_file(&file, -1, flags, taille_file, nb_msg, len_max)){
             return NULL;
         }
         options = O_RDWR;
@@ -134,7 +134,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
                 return NULL;
             }
             int flags = MAP_SHARED;
-            if(!m_init_file(file, fd, flags, taille_file, nb_msg, len_max)){
+            if(!m_init_file(&file, fd, flags, taille_file, nb_msg, len_max)){
                 return NULL;
             }
         }
