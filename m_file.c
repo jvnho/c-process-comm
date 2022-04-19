@@ -139,7 +139,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             int flags = MAP_SHARED;
             if(!m_init_file(&file, fd, flags, taille_file, nb_msg, len_max))
                 return NULL;
-        } 
+        }
         else return NULL;
     }
     MESSAGE *m = malloc(sizeof(MESSAGE));
@@ -205,9 +205,19 @@ size_t m_readmsg(MESSAGE *file, void *msg, int idx)
     return strlen(msg);
 }
 
-size_t shiftblock(MESSAGE *file, int idx)
+int shiftblock(MESSAGE *file, int idx)
 {
-
+    int first = file->file->first;
+    char *msgs = (char *)&file->file[1];
+    size_t block_size = sizeof(mon_message) + file->file->len_max;
+    int capacite = m_capacite(file);
+    for(int i = idx; i != first; i = (i-1)%capacite)
+    {
+        char *addr_dst = &msgs[block_size*i];
+        char *addr_src = &msgs[block_size*((i-1)%capacite)];
+        memmove(addr_dst, addr_src, block_size);
+    }
+    return 1;
 }
 
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
@@ -250,10 +260,9 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
         }
         if(found == 1){
             int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
-            if(idxsrc != *first){
-                //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-                shiftblock(file, idxsrc);
-            }
+            //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
+            shiftblock(file, idxsrc);
+            *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
             if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
             pthread_cond_signal(&file->file->wcond);
             return n;
