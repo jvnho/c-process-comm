@@ -38,6 +38,14 @@ size_t m_nb(MESSAGE *message)
     int last = message->file->last;
     int capacite = m_capacite(message);
     if(first == -1) return 0;
+    //on vérifie que le type de first n'est pas -1
+    long type = 0;
+    char *msgs = (char *)&message->file[1];
+    memcpy(&type, &msgs[(sizeof(mon_message) + message->file->len_max) * first], sizeof(long));
+    if(type == -1){
+        printf("%ld\n", type);
+        return 0;
+    }
     if(first == last) return capacite;
     if(first < last) return last - first + 1; //first,first+1,...,last-1
     return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
@@ -46,22 +54,22 @@ size_t m_nb(MESSAGE *message)
 int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t nb_msg, size_t len_max)
 {
     *file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, flags, fd, 0);
-    if((void *) (*file) == MAP_FAILED){
+    if((void *) (*file) == MAP_FAILED)
         return 0;
-    }
     memset(*file, 0, taille_file);
-    if(initialiser_mutex(&(*file)->mutex) != 0){
+    if(initialiser_mutex(&(*file)->mutex) != 0
+       || initialiser_cond(&(*file)->rcond) != 0
+       || initialiser_cond(&(*file)->wcond) != 0)
         return 0;
-    }
-    if(initialiser_cond(&(*file)->rcond) != 0){
-        return 0;
-    }
-    if(initialiser_cond(&(*file)->wcond) != 0){
-        return 0;
-    }
     (*file)->len_max = len_max;
     (*file)->nb_msg = nb_msg;
     (*file)->first = -1;
+    char *msgs = (char*) ((*file)+1);
+    for(size_t i = 0; i < nb_msg; i++){
+        char *mes_addr = &msgs[(sizeof(mon_message)+len_max)*i];
+        long val = -1;
+        memcpy(mes_addr, &val, sizeof(long));
+    }
     return 1;
 }
 
@@ -202,6 +210,8 @@ size_t m_readmsg(MESSAGE *file, void *msg, int idx)
     char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idx];
     memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
     memset(mes_addr, 0, file->file->len_max+sizeof(long)); // supprime le message de la file
+    long val = -1;
+    memcpy(mes_addr, &val, sizeof(long));
     return strlen(msg);
 }
 
@@ -220,6 +230,26 @@ int shiftblock(MESSAGE *file, int idx)
     return 1;
 }
 
+int m_msg_index(MESSAGE *file, long type)
+{
+    int first = file->file->first;
+    int last = file->file->last;
+    if(m_nb(file) == 0)
+        return -1;
+    if(type == 0)
+        return first;
+    char *msgs = (char *)&file->file[1];
+    size_t block_size = sizeof(mon_message) + file->file->len_max;
+    for(int i = first; i != last; i = (i+1)%m_capacite(file)){
+        long msg_type = 0;
+        char *msg_addr = &msgs[block_size*i];
+        memcpy(&msg_type, msg_addr, sizeof(long));
+        if((type > 0 && msg_type == type) || (type < 0 && abs(type) <= msg_type))
+            return i;
+    }
+    return -1;
+}
+
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
 {
     if(len < m_message_len(file)){
@@ -227,13 +257,14 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
         return -1;
     }
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
-    if(m_nb(file) == 0){
+    int idxsrc = 0;
+    if( (idxsrc = m_msg_index(file,type)) == -1){
         if(flags == O_NONBLOCK){
             if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
             errno = EAGAIN;
             return -1;
         } else if(flags == 0){
-            while (m_nb(file) == 0){
+            while ((idxsrc = m_msg_index(file,type)) == -1){
                 if( pthread_cond_wait( &file->file->rcond, &file->file->mutex) > 0 ) return -1;
             }
         }
@@ -241,34 +272,13 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
     }
     int *first = &file->file->first;
     int *last = &file->file->last;
-    int idxsrc = -1;
-    if(type == 0){
-        idxsrc = *first;
-        *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
-        if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-        pthread_cond_signal(&file->file->wcond);
-        return m_readmsg(file, msg, idxsrc);
-    } else {
-        int found = 0;
-        for(int i = *first; i != *last && found == 0; i = (i+1)%m_capacite(file)){
-            if((type > 0 && file->file->messages[i].type == type)
-                || (type < 0 && file->file->messages[i].type <= abs(type)))
-            {
-                found = 1;
-                idxsrc = i;
-            }
-        }
-        if(found == 1){
-            int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
-            //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-            shiftblock(file, idxsrc);
-            *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
-            if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-            pthread_cond_signal(&file->file->wcond);
-            return n;
-        } else {
-            if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-            return 0;
-        }
+    int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
+    if(idxsrc != *first){
+        //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
+        shiftblock(file, idxsrc);
     }
+    *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
+    if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+    pthread_cond_signal(&file->file->wcond);
+    return n;
 }
