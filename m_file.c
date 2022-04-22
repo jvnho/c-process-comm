@@ -24,16 +24,14 @@ int initialiser_cond(pthread_cond_t *pcond){
   return code;
 }
 
-size_t m_message_len(MESSAGE *message)
-{
+size_t m_message_len(MESSAGE *message){
     return message->file->len_max;
 }
-size_t m_capacite(MESSAGE *message)
-{
+size_t m_capacite(MESSAGE *message){
     return message->file->nb_msg;
 }
-size_t m_nb(MESSAGE *message)
-{
+
+size_t m_nb(MESSAGE *message){
     int first = message->file->first;
     int last = message->file->last;
     int capacite = m_capacite(message);
@@ -51,8 +49,7 @@ size_t m_nb(MESSAGE *message)
     return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
 }
 
-int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t nb_msg, size_t len_max)
-{
+int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t nb_msg, size_t len_max){
     *file = mmap(NULL, taille_file, PROT_READ|PROT_WRITE, flags, fd, 0);
     if((void *) (*file) == MAP_FAILED)
         return 0;
@@ -64,7 +61,7 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
     (*file)->len_max = len_max;
     (*file)->nb_msg = nb_msg;
     (*file)->first = -1;
-    char *msgs = (char*) ((*file)+1);
+    char *msgs = (char*) &(*file)[1];
     for(size_t i = 0; i < nb_msg; i++){
         char *mes_addr = &msgs[(sizeof(mon_message)+len_max)*i];
         long val = -1;
@@ -73,18 +70,7 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
     return 1;
 }
 
-/**
- * @brief Crée une nouvelle file de message et renvoie un pointeur
- * vers un object MESSAGE vers cette file
- * @param nom nom de la file de messages
- * @param options flags
- * @param nb_msg est la capacité de la file
- * @param len_max longueur maximale d'un message
- * @param mode permissions pour la nouvelle file de messages
- * @return MESSAGE*
-*/
-MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/)
-{
+MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/){
     int fd; // descripteur du fichier de mémoire partagée
     FILE_MSG *file; // file de messages
     if(nom == NULL) {
@@ -114,8 +100,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
         if(fileexist == 1 && !(O_EXCL & options)){
             //file existe et pas de flags O_EXCL
             //connexion à une file existante
-            fd = shm_open(nom, options, 0000);
-            if(fd == -1)
+            if((fd = shm_open(nom, options, 0000)) == -1)
                 return NULL;
             struct stat statbuf;
             if(fstat(fd, &statbuf) == -1)
@@ -136,8 +121,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
                 if(i == 2) mode = va_arg(args, mode_t);
             }
             va_end(args);
-            fd = shm_open(nom, options, mode);
-            if(fd == -1){
+            if((fd = shm_open(nom, options, mode)) == -1){
                 return NULL;
             }
             //création d'une nouvelle file
@@ -159,11 +143,6 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
     return m;
 }
 
-/**
- * @brief Déconnecte la file de message.
- * @param file file de message à déconnecter.
- * @return 0 si 0, -1 en cas d'erreur.
- */
 int m_deconnexion(MESSAGE *file){
     if (close(file ->fd) == -1) return -1;
     file->file->connecte--;
@@ -204,19 +183,17 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     return 0;
 }
 
-size_t m_readmsg(MESSAGE *file, void *msg, int idx)
-{
+size_t m_readmsg(MESSAGE *file, void *msg, int idx){
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idx];
     memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
-    memset(mes_addr, 0, file->file->len_max+sizeof(long)); // supprime le message de la file
+    memset(mes_addr+sizeof(long), 0, file->file->len_max);
     long val = -1;
     memcpy(mes_addr, &val, sizeof(long));
     return strlen(msg);
 }
 
-int shiftblock(MESSAGE *file, int idx)
-{
+int shiftblock(MESSAGE *file, int idx){
     int first = file->file->first;
     char *msgs = (char *)&file->file[1];
     size_t block_size = sizeof(mon_message) + file->file->len_max;
@@ -230,8 +207,7 @@ int shiftblock(MESSAGE *file, int idx)
     return 1;
 }
 
-int m_msg_index(MESSAGE *file, long type)
-{
+int m_msg_index(MESSAGE *file, long type){
     int first = file->file->first;
     int last = file->file->last;
     if(m_nb(file) == 0)
@@ -250,14 +226,13 @@ int m_msg_index(MESSAGE *file, long type)
     return -1;
 }
 
-ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
-{
+ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
     if(len < m_message_len(file)){
         errno = EMSGSIZE;
         return -1;
     }
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
-    int idxsrc = 0;
+    int idxsrc = 0; //idx du message de la file
     if( (idxsrc = m_msg_index(file,type)) == -1){
         if(flags == O_NONBLOCK){
             if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
@@ -270,9 +245,8 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags)
         }
         else return -1;
     }
-    int *first = &file->file->first;
-    int *last = &file->file->last;
     int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
+    int *first = &file->file->first;
     if(idxsrc != *first){
         //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
         shiftblock(file, idxsrc);
