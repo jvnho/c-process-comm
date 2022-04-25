@@ -61,6 +61,7 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
     (*file)->len_max = len_max;
     (*file)->nb_msg = nb_msg;
     (*file)->first = -1;
+    (*file)->destruction = 0;
     char *msgs = (char*) &(*file)[1];
     for(size_t i = 0; i < nb_msg; i++){
         char *mes_addr = &msgs[(sizeof(mon_message)+len_max)*i];
@@ -137,20 +138,43 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
     MESSAGE *m = malloc(sizeof(MESSAGE));
     if(m == NULL) return NULL;
     memset(m, 0, sizeof(MESSAGE));
-    m->fd = fd;
+    close(fd);
     m->flags = options;
     m->file = file;
+    file->connecte++;
     return m;
 }
 
 int m_deconnexion(MESSAGE *file){
-    if (close(file ->fd) == -1) return -1;
+    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     file->file->connecte--;
+    if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
+    // munmap ?
     free(file);
     return 0;
 }
 
+int m_destruction(const char *nom){
+    int fd = shm_open(nom, O_RDWR, S_IRUSR | S_IWUSR);
+    if (fd == -1) return -1;
+    struct stat statbuf;
+    if(fstat(fd, &statbuf) == -1) return -1;
+    FILE_MSG *file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    if(file == MAP_FAILED) return -1;
+    if (close(fd) == -1) return -1;
+    if (pthread_mutex_lock(&file->mutex) > 0) return -1;
+    file->destruction = 1;
+    while (file->connecte){
+        if( pthread_cond_wait( &file->rcond, &file->mutex) > 0 ) return -1;
+    }
+    if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
+    if (shm_unlink(nom) == -1) return -1;
+    free(file); // munmap ?
+    return 0;
+}
+
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
+    if ((file->flags & (O_RDONLY | O_RDWR)) == 0) return -11;
     if (len > file->file->len_max){
         errno = EMSGSIZE;
         return -1;

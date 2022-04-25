@@ -28,21 +28,22 @@ typedef struct
     int first;
     int last;
     int connecte; // nombre de processus connecté à la file
+    int destruction; // boolean qui dit si un processus demande la supression de la file
     mon_message *messages; //file de messages
 } FILE_MSG;
 
 typedef struct {
     int flags;
-    int fd;
     FILE_MSG *file;
 } MESSAGE;
 
-int m_deconnexion(MESSAGE *file);
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag);
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags);
 size_t m_message_len(MESSAGE *message);
 size_t m_capacite(MESSAGE *message);
 size_t m_nb(MESSAGE *message);
+int m_deconnexion(MESSAGE *file);
+int m_destruction(const char *nom);
 
 #endif
