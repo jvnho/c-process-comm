@@ -41,7 +41,6 @@ size_t m_nb(MESSAGE *message){
     char *msgs = (char *)&message->file[1];
     memcpy(&type, &msgs[(sizeof(mon_message) + message->file->len_max) * first], sizeof(long));
     if(type == -1){
-        printf("%ld\n", type);
         return 0;
     }
     if(first == last) return capacite;
@@ -244,7 +243,7 @@ int m_msg_index(MESSAGE *file, long type){
         long msg_type = 0;
         char *msg_addr = &msgs[block_size*i];
         memcpy(&msg_type, msg_addr, sizeof(long));
-        if((type > 0 && msg_type == type) || (type < 0 && abs(type) <= msg_type))
+        if((type > 0 && msg_type == type) || (type < 0 && abs(type) >= msg_type))
             return i;
     }
     return -1;
