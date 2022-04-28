@@ -62,6 +62,7 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
     (*file)->nb_msg = nb_msg;
     (*file)->first = -1;
     (*file)->destruction = 0;
+    (*file)->nb_erg = 0;
     char *msgs = (char*) &(*file)[1];
     for(size_t i = 0; i < nb_msg; i++){
         char *mes_addr = &msgs[(sizeof(mon_message)+len_max)*i];
@@ -74,6 +75,9 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/){
     int fd; // descripteur du fichier de mémoire partagée
     FILE_MSG *file; // file de messages
+
+    int nb_ergt = 10; // A Modifier
+
     if(nom == NULL) {
         //file anonyme
         size_t nb_msg;
@@ -85,11 +89,12 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             if(i == 1) len_max = va_arg(args, size_t);
         }
         va_end(args);
-        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
+        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg) + nb_ergt * sizeof(enregistrement);
         int flags = MAP_ANONYMOUS | MAP_SHARED;
         if(!m_init_file(&file, -1, flags, taille_file, nb_msg, len_max))
             return NULL;
         options = O_RDWR;
+        file->nb_ergmax = nb_ergt;
     } else {
         //on vérifie si le fichier temporaire existe
         //on adaptera selon les flags fournis
@@ -126,12 +131,13 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
                 return NULL;
             }
             //création d'une nouvelle file
-            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
+            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg) + nb_ergt * sizeof(enregistrement);
             if(ftruncate(fd, taille_file) == -1)
                 return NULL;
             int flags = MAP_SHARED;
             if(!m_init_file(&file, fd, flags, taille_file, nb_msg, len_max))
                 return NULL;
+            file->nb_ergmax = nb_ergt;
         }
         else return NULL;
     }
@@ -169,12 +175,11 @@ int m_destruction(const char *nom){
     }
     if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
     if (shm_unlink(nom) == -1) return -1;
-    free(file); // munmap ?
     return 0;
 }
 
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
-    if ((file->flags & (O_RDONLY | O_RDWR)) == 0) return -11;
+    if ( (file->flags & O_RDONLY ) == 0) return -1;
     if (len > file->file->len_max){
         errno = EMSGSIZE;
         return -1;
@@ -279,4 +284,36 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     pthread_cond_signal(&file->file->wcond);
     return n;
+}
+
+int m_enregistrement(MESSAGE *file, long type ,int signal, int msgflag){
+    /// PEUT ETRE METTRE UN AUTRE MUTEX ///
+
+    if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
+    if (file->file->nb_erg == file->file->nb_ergmax){
+        if (msgflag !=  0){
+            pthread_mutex_unlock(&file->file->mutex);
+            if (msgflag == O_NONBLOCK) errno = EAGAIN;
+            return -1;
+        }
+        else{
+            while (file->file->nb_erg == file->file->nb_ergmax){
+                if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
+            }
+        }
+    }
+    enregistrement er = {getpid(), type, signal};
+    char *f = (char *)file->file;
+    char *addr = f + sizeof(FILE_MSG) + (file->file->nb_msg * (sizeof(long) + file->file->len_max));
+    enregistrement *tmp = (enregistrement *) addr;
+    for (int i = 0 ; i < file->file->nb_ergmax; i++){
+        if (tmp -> pid == 0){
+            i = file->file->nb_ergmax;
+            memcpy(tmp, &er, sizeof(enregistrement));
+        }
+        tmp++;
+    }
+    file->file->nb_erg++;
+    if (pthread_mutex_unlock(&file->file->mutex) == -1) return -1;
+    return 0;
 }
