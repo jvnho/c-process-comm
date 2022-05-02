@@ -187,9 +187,10 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         return -1;
     }
 
-    ////// ENVOIE UN SIGNAL SI LE TYPE DU MESSAGE EST PRESENT DANS LES ENREGISTREMENT
-    int res, flag = 1;
+    ////// TROUVE SI IL Y A UN ENREGISTREMENT POUR CE MESSAGE
+    int res, flag = 1, signal = -1;
     long type;
+    pid_t pid = -1;
     memcpy(&type, msg, sizeof(long));
     while ( flag && (res = pthread_mutex_trylock(&file->file->mutex_enregistrement)) > 0){
         if (res == EBUSY){
@@ -209,7 +210,8 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     enregistrement *tmp = (enregistrement *) addr;
     for (int i = 0 ; i < file->file->nb_ergmax; i++){
         if (tmp->pid != 0 && tmp->type == type){
-            kill(tmp->pid,tmp->signal);
+            pid = tmp->pid;
+            signal = tmp->signal;
             memset(tmp, 0, sizeof(enregistrement));
             i = file->file->nb_ergmax;
         }
@@ -242,6 +244,7 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     memset(mes_addr, 0, sizeof(long) + file->file->len_max);
     memcpy(mes_addr, msg, len+sizeof(long));
     pthread_cond_signal(&file->file->rcond);
+    if (pid != -1 && signal != -1) kill(pid, signal);   // ENVOIE DU SIGNAL SI IL Y A UN ENREGISTREMENT
     //printf("%d %d\n",*first, *last);
     return 0;
 }
