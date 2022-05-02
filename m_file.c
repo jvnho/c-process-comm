@@ -227,6 +227,10 @@ int shiftblock(MESSAGE *file, int idx){
         char *addr_src = &msgs[block_size*((i-1)%capacite)];
         memmove(addr_dst, addr_src, block_size);
     }
+    char *addr_first = &msgs[(sizeof(mon_message)+file->file->len_max)*first];
+    long val = -1;
+    memcpy(addr_first, &val, sizeof(long));
+    memset(addr_first+sizeof(long), 0, file->file->len_max);
     return 1;
 }
 

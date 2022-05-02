@@ -15,6 +15,7 @@
 
 typedef struct{
     long type;
+    //size_t length; //longueur du message
     char mtext[];
 } mon_message;
 
@@ -29,7 +30,6 @@ typedef struct
     int last;
     int connecte; // nombre de processus connecté à la file
     int destruction; // boolean qui dit si un processus demande la supression de la file
-    mon_message *messages; //file de messages
 } FILE_MSG;
 
 typedef struct {
