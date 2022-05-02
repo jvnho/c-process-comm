@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <signal.h>
 
 #ifndef M_FILE
 #define M_FILE
@@ -31,6 +32,8 @@ typedef struct
     int destruction; // boolean qui dit si un processus demande la supression de la file
     int nb_ergmax; // nombre maximal d'enregistrement
     int nb_erg; // nombre d'enregistrement en cours
+    pthread_mutex_t mutex_enregistrement;
+    pthread_cond_t cond_er;
     mon_message *messages; //file de messages
 } FILE_MSG;
 
@@ -54,6 +57,7 @@ size_t m_nb(MESSAGE *message);
 int m_deconnexion(MESSAGE *file);
 int m_destruction(const char *nom);
 int m_enregistrement(MESSAGE *file, long type ,int signal, int msgflag);
+int m_annulenr(MESSAGE *file);
 
 
 #endif
