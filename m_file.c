@@ -56,9 +56,11 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
     memset(*file, 0, taille_file);
     if(initialiser_mutex(&(*file)->mutex) != 0
        || initialiser_mutex(&(*file)->mutex_enregistrement) != 0
+       || initialiser_mutex(&(*file)->mutex_destruction) != 0
        || initialiser_cond(&(*file)->rcond) != 0
        || initialiser_cond(&(*file)->wcond) != 0
-       || initialiser_cond(&(*file)->cond_er) != 0)
+       || initialiser_cond(&(*file)->cond_er) != 0
+       || initialiser_cond(&(*file)->cond_destruction) != 0)
         return 0;
     (*file)->len_max = len_max;
     (*file)->nb_msg = nb_msg;
@@ -116,6 +118,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
             if((void *) file == MAP_FAILED)
                 return NULL;
+            if (file->destruction) return NULL;
         } else if(O_CREAT & options){
             //création et connexion à une nouvelle file
             size_t nb_msg;
@@ -156,6 +159,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
 int m_deconnexion(MESSAGE *file){
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     file->file->connecte--;
+    if (file->file->connecte == 0 && (pthread_cond_signal(&file->file->cond_destruction) > 0)) return -1;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     // munmap ?
     free(file);
@@ -170,12 +174,12 @@ int m_destruction(const char *nom){
     FILE_MSG *file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if(file == MAP_FAILED) return -1;
     if (close(fd) == -1) return -1;
-    if (pthread_mutex_lock(&file->mutex) > 0) return -1;
+    if (pthread_mutex_lock(&file->mutex_destruction) > 0) return -1;
     file->destruction = 1;
     while (file->connecte){
-        if( pthread_cond_wait( &file->rcond, &file->mutex) > 0 ) return -1;
+        if( pthread_cond_wait( &file->cond_destruction, &file->mutex_destruction) > 0 ) return -1;
     }
-    if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
+    if (pthread_mutex_unlock(&file->mutex_destruction) > 0) return -1;
     if (shm_unlink(nom) == -1) return -1;
     return 0;
 }
@@ -186,7 +190,6 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         errno = EMSGSIZE;
         return -1;
     }
-
     ////// TROUVE SI IL Y A UN ENREGISTREMENT POUR CE MESSAGE
     int res, flag = 1, signal = -1;
     long type;
@@ -214,10 +217,12 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
             signal = tmp->signal;
             memset(tmp, 0, sizeof(enregistrement));
             i = file->file->nb_ergmax;
+            file->file->nb_erg--;
         }
         tmp++;
     }
     if ((res = pthread_mutex_unlock(&file->file->mutex_enregistrement) ) > 0 && res != EPERM) return -1;
+    if (pthread_cond_signal(&file->file->cond_er) > 0) return -1;;
     ///////////////////////////////////////////////
 
     int *first = &file->file->first;
@@ -245,7 +250,7 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     memcpy(mes_addr, msg, len+sizeof(long));
     pthread_cond_signal(&file->file->rcond);
     if (pid != -1 && signal != -1) kill(pid, signal);   // ENVOIE DU SIGNAL SI IL Y A UN ENREGISTREMENT
-    //printf("%d %d\n",*first, *last);
+    printf("%d %d\n",*first, *last);
     return 0;
 }
 
@@ -368,5 +373,6 @@ int m_annulenr(MESSAGE *file){
     }
     file->file->nb_erg--;
     if (pthread_mutex_unlock(&file->file->mutex_enregistrement) > 0) return -1;
+    if (pthread_cond_signal(&file->file->cond_er) > 0) return -1;
     return 0;
 }

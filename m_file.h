@@ -30,6 +30,8 @@ typedef struct
     int last;
     int connecte; // nombre de processus connecté à la file
     int destruction; // boolean qui dit si un processus demande la supression de la file
+    pthread_mutex_t mutex_destruction;
+    pthread_cond_t cond_destruction;
     int nb_ergmax; // nombre maximal d'enregistrement
     int nb_erg; // nombre d'enregistrement en cours
     pthread_mutex_t mutex_enregistrement;
