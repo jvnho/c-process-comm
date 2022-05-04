@@ -15,7 +15,7 @@
 
 typedef struct{
     long type;
-    //size_t length; //longueur du message
+    size_t length; //longueur du message
     char mtext[];
 } mon_message;
 
@@ -25,7 +25,7 @@ typedef struct
     pthread_cond_t rcond;
     pthread_cond_t wcond;
     size_t len_max; // taille maximale des messages de la file
-    size_t nb_msg; // nombre de messages que la file peut stocker
+    size_t max_byte; // quantité maximale en octet que la file peut stocker
     int first;
     int last;
     int connecte; // nombre de processus connecté à la file

@@ -28,24 +28,17 @@ size_t m_message_len(MESSAGE *message){
     return message->file->len_max;
 }
 size_t m_capacite(MESSAGE *message){
-    return message->file->nb_msg;
+    return message->file->max_byte;
 }
 
+//renvoie la quantité d'octets utilisée par la file de messages
 size_t m_nb(MESSAGE *message){
     int first = message->file->first;
     int last = message->file->last;
-    int capacite = m_capacite(message);
     if(first == -1) return 0;
-    //on vérifie que le type de first n'est pas -1
-    long type = 0;
-    char *msgs = (char *)&message->file[1];
-    memcpy(&type, &msgs[(sizeof(mon_message) + message->file->len_max) * first], sizeof(long));
-    if(type == -1){
-        return 0;
-    }
-    if(first == last) return capacite;
-    if(first < last) return last - first + 1; //first,first+1,...,last-1
-    return capacite - first + last + 1; //first,first+1,...,n-1,0,1,...,last-1
+    if(first == last) return m_capacite(message);
+    if(first < last) return last - first;
+    return m_capacite(message) - first + last;
 }
 
 int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t nb_msg, size_t len_max){
@@ -58,15 +51,9 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
        || initialiser_cond(&(*file)->wcond) != 0)
         return 0;
     (*file)->len_max = len_max;
-    (*file)->nb_msg = nb_msg;
+    (*file)->max_byte = taille_file - sizeof(FILE_MSG);
     (*file)->first = -1;
     (*file)->destruction = 0;
-    char *msgs = (char*) &(*file)[1];
-    for(size_t i = 0; i < nb_msg; i++){
-        char *mes_addr = &msgs[(sizeof(mon_message)+len_max)*i];
-        long val = -1;
-        memcpy(mes_addr, &val, sizeof(long));
-    }
     return 1;
 }
 
@@ -84,7 +71,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             if(i == 1) len_max = va_arg(args, size_t);
         }
         va_end(args);
-        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
+        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg);
         int flags = MAP_ANONYMOUS | MAP_SHARED;
         if(!m_init_file(&file, -1, flags, taille_file, nb_msg, len_max))
             return NULL;
@@ -125,7 +112,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
                 return NULL;
             }
             //création d'une nouvelle file
-            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(long) + sizeof(char) * len_max) * nb_msg);
+            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg);
             if(ftruncate(fd, taille_file) == -1)
                 return NULL;
             int flags = MAP_SHARED;
@@ -172,8 +159,15 @@ int m_destruction(const char *nom){
     return 0;
 }
 
+//fonction qui renvoie le nombre d'octets libre dans la file
+int getfreespace(MESSAGE *file)
+{
+    if(file->file->first == -1) return m_capacite(file);
+    return m_capacite(file) - m_nb(file);
+}
+
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
-    if ((file->flags & (O_RDONLY | O_RDWR)) == 0) return -11;
+    if ((file->flags & (O_RDONLY | O_RDWR)) == 0) return -1;
     if (len > file->file->len_max){
         errno = EMSGSIZE;
         return -1;
@@ -182,37 +176,41 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     int *last = &file->file->last;
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     int l = *last;
-    *last = *last == file->file->nb_msg-1 ? 0 : (*last) + 1;
-    if (*first == -1) (*first)++;
-    if (*first == *last){ // SI C'EST PLEIN
+    if (*first == -1) *first = 0;
+    if (getfreespace(file) < len){ // on regarde si la file a assez de place pour stocker le message
         if (msgflag !=  0){
             pthread_mutex_unlock(&file->file->mutex);
             if (msgflag == O_NONBLOCK) errno = EAGAIN;
             return -1;
         }
         else{
-            while (*first == *last){
+            while (getfreespace(file) < len){
                 if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
             }
         }
     }
+    *last = (*last + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
-    char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max )*l];
-    memset(mes_addr, 0, sizeof(long) + file->file->len_max);
-    memcpy(mes_addr, msg, len+sizeof(long));
+    char *mes_addr = &msgs[l];
+    if(*first < *last) { //assez de place sur la droite de la file, TODO: à changer *last peut changer entre temps
+        memcpy(mes_addr, msg, sizeof(mon_message) + sizeof(char) * len);
+    } else { //le message doit être coupé en deux
+        int split = m_capacite(file)-l;
+        memcpy(mes_addr, msg, split); // écriture à droite de la file
+        memcpy(&msgs, msg+split, len-split); // écriture à gauche de la file
+    }
     pthread_cond_signal(&file->file->rcond);
     printf("%d %d\n",*first, *last);
     return 0;
 }
 
-size_t m_readmsg(MESSAGE *file, void *msg, int idx){
+size_t m_readmsg(MESSAGE *file, void *msg, int addr){
     char *msgs = (char *)&file->file[1];
-    char *mes_addr = &msgs[(sizeof(mon_message)+file->file->len_max)*idx];
-    memcpy(msg, mes_addr+sizeof(long), file->file->len_max);
-    memset(mes_addr+sizeof(long), 0, file->file->len_max);
-    long val = -1;
-    memcpy(mes_addr, &val, sizeof(long));
+    char *mes_addr = &msgs[addr];
+    int len = *(mes_addr+sizeof(long));
+    memcpy(msg, mes_addr+sizeof(long), len);
+    memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
     return strlen(msg);
 }
 
@@ -237,18 +235,18 @@ int shiftblock(MESSAGE *file, int idx){
 int m_msg_index(MESSAGE *file, long type){
     int first = file->file->first;
     int last = file->file->last;
-    if(m_nb(file) == 0)
+    if(!m_nb(file))
         return -1;
     if(type == 0)
         return first;
     char *msgs = (char *)&file->file[1];
-    size_t block_size = sizeof(mon_message) + file->file->len_max;
-    for(int i = first; i != last; i = (i+1)%m_capacite(file)){
-        long msg_type = 0;
-        char *msg_addr = &msgs[block_size*i];
-        memcpy(&msg_type, msg_addr, sizeof(long));
+    int i = first;
+    while(i != last){
+        char *msg_addr = &msgs[i];
+        long msg_type = *msg_addr;
         if((type > 0 && msg_type == type) || (type < 0 && abs(type) >= msg_type))
             return i;
+        i += *(msg_addr+sizeof(long));  //champ "len" de mon_message
     }
     return -1;
 }
@@ -278,7 +276,7 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
         shiftblock(file, idxsrc);
     }
-    *first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
+    //*first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     pthread_cond_signal(&file->file->wcond);
     return n;
