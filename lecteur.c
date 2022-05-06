@@ -11,7 +11,12 @@ int main(int argc, char const *argv[]){
 
     char recept[100];
     memset(recept,0,100);
-    int code = m_reception(m, recept, 100, 0, 0);
+    long type = 0;
+    if(argc > 1)
+    {
+        type = atol(argv[1]);
+    }
+    int code = m_reception(m, recept, 100, type, 0);
     if(code == -1 && errno == EAGAIN)
     {
         printf("pas encore de message\n");

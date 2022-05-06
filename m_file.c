@@ -185,6 +185,7 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         }
         else{
             while (getfreespace(file) < len){
+                //TODO: = à repenser
                 if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
             }
         }
@@ -211,24 +212,23 @@ size_t m_readmsg(MESSAGE *file, void *msg, int addr){
     int len = *(mes_addr+sizeof(long));
     memcpy(msg, mes_addr+sizeof(long), len);
     memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
-    return strlen(msg);
+    return len;
 }
 
 int shiftblock(MESSAGE *file, int idx){
     int first = file->file->first;
+    char tmp[sizeof(file->file)];
+    memcpy(tmp, file->file, sizeof(file->file)); // fais une copie de la file de messages courante
     char *msgs = (char *)&file->file[1];
-    size_t block_size = sizeof(mon_message) + file->file->len_max;
-    int capacite = m_capacite(file);
-    for(int i = idx; i != first; i = (i-1)%capacite)
-    {
-        char *addr_dst = &msgs[block_size*i];
-        char *addr_src = &msgs[block_size*((i-1)%capacite)];
-        memmove(addr_dst, addr_src, block_size);
+    int i = first, j = first;
+    while(j != idx){
+        char *addr_src = &msgs[i];
+        size_t len = *(addr_src+sizeof(long));
+        j = j + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        char *addr_dst = &msgs[j];
+        memcpy(addr_dst, tmp+i, len);
+        i = i + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
-    char *addr_first = &msgs[(sizeof(mon_message)+file->file->len_max)*first];
-    long val = -1;
-    memcpy(addr_first, &val, sizeof(long));
-    memset(addr_first+sizeof(long), 0, file->file->len_max);
     return 1;
 }
 
@@ -246,7 +246,8 @@ int m_msg_index(MESSAGE *file, long type){
         long msg_type = *msg_addr;
         if((type > 0 && msg_type == type) || (type < 0 && abs(type) >= msg_type))
             return i;
-        i += *(msg_addr+sizeof(long));  //champ "len" de mon_message
+        size_t len = *(msg_addr+sizeof(long));
+        i = i + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
     return -1;
 }
@@ -277,6 +278,7 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         shiftblock(file, idxsrc);
     }
     //*first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
+    *first = *first + sizeof(mon_message) + sizeof(char) * n;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     pthread_cond_signal(&file->file->wcond);
     return n;
