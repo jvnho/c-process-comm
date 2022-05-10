@@ -189,7 +189,6 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
             }
         }
     }
-    printf("%d\n",getfreespace(file) );
     int l = *last;
     *last = (*last + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
@@ -217,18 +216,19 @@ size_t m_readmsg(MESSAGE *file, void *msg, int addr){
 }
 
 int shiftblock(MESSAGE *file, int idx){
-    int first = file->file->first;
-    char tmp[sizeof(file->file)];
-    memcpy(tmp, file->file, sizeof(file->file)); // fais une copie de la file de messages courante
     char *msgs = (char *)&file->file[1];
+    int first = file->file->first;
+    size_t size = sizeof(file->file) - sizeof(FILE_MSG);
+    char tmp[size];
+    memcpy(tmp, msgs, size); // fais une copie de la file de messages courante
     int i = first, j = first;
     while(j != idx){
         char *addr_src = &msgs[i];
         size_t len = *(addr_src+sizeof(long));
-        j = j + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        j = (j + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
         char *addr_dst = &msgs[j];
         memcpy(addr_dst, tmp+i, len);
-        i = i + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        i = (i + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
     return 1;
 }
@@ -242,12 +242,12 @@ int m_msg_index(MESSAGE *file, long type){
     char *msgs = (char *)&file->file[1];
     int i = first;
     while(i != last){
-        char *msg_addr = &msgs[i];
-        long msg_type = *msg_addr;
+        mon_message *msg_addr = (mon_message*) &msgs[i];
+        long msg_type = msg_addr->type;
+        size_t len = msg_addr->length;
         if((type > 0 && msg_type == type) || (type < 0 && abs(type) >= msg_type))
             return i;
-        size_t len = *(msg_addr+sizeof(long));
-        i = i + (sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        i = (i + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
     return -1;
 }
@@ -275,7 +275,7 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
     int *first = &file->file->first;
     if(idxsrc != *first){
         //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-        shiftblock(file, idxsrc);
+        //shiftblock(file, idxsrc);
     }
     *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
