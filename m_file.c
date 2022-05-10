@@ -36,7 +36,7 @@ size_t m_nb(MESSAGE *message){
     int first = message->file->first;
     int last = message->file->last;
     if(first == -1) return 0;
-    if(first == last) return m_capacite(message);
+    if(first == last) return last;
     if(first < last) return last - first;
     return m_capacite(message) - first + last;
 }
@@ -51,7 +51,7 @@ int m_init_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t n
        || initialiser_cond(&(*file)->wcond) != 0)
         return 0;
     (*file)->len_max = len_max;
-    (*file)->max_byte = taille_file - sizeof(FILE_MSG);
+    (*file)->max_byte = (sizeof(mon_message) + sizeof(char) * len_max) * nb_msg;
     (*file)->first = -1;
     (*file)->destruction = 0;
     return 1;
@@ -175,21 +175,22 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     int *first = &file->file->first;
     int *last = &file->file->last;
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
-    int l = *last;
     if (*first == -1) *first = 0;
-    if (getfreespace(file) < len){ // on regarde si la file a assez de place pour stocker le message
+    if (getfreespace(file) < sizeof(mon_message) + len){ // on regarde si la file a assez de place pour stocker le message
         if (msgflag !=  0){
             pthread_mutex_unlock(&file->file->mutex);
             if (msgflag == O_NONBLOCK) errno = EAGAIN;
             return -1;
         }
         else{
-            while (getfreespace(file) < len){
+            while (getfreespace(file) < sizeof(mon_message) + len){
                 //TODO: = à repenser
                 if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
             }
         }
     }
+    printf("%d\n",getfreespace(file) );
+    int l = *last;
     *last = (*last + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
@@ -210,7 +211,7 @@ size_t m_readmsg(MESSAGE *file, void *msg, int addr){
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
     int len = *(mes_addr+sizeof(long));
-    memcpy(msg, mes_addr+sizeof(long), len);
+    memcpy(msg, mes_addr+sizeof(mon_message), len);
     memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
     return len;
 }
