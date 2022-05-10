@@ -236,10 +236,9 @@ int shiftblock(MESSAGE *file, int idx){
 int m_msg_index(MESSAGE *file, long type){
     int first = file->file->first;
     int last = file->file->last;
-    if(!m_nb(file))
-        return -1;
-    if(type == 0)
-        return first;
+    if(first == last) return -1;
+    if(m_nb(file) == 0) return -1;
+    if(type == 0) return first;
     char *msgs = (char *)&file->file[1];
     int i = first;
     while(i != last){
@@ -278,8 +277,7 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
         shiftblock(file, idxsrc);
     }
-    //*first = *first == file->file->nb_msg-1 ? 0 : (*first)+1;
-    *first = *first + sizeof(mon_message) + sizeof(char) * n;
+    *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     pthread_cond_signal(&file->file->wcond);
     return n;

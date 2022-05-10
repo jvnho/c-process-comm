@@ -6,11 +6,13 @@ int main(int argc, char const *argv[]){
     if(argc > 1)
     {
         mes -> type = atol(argv[1]);
+        mes -> length = strlen(argv[2]);
         memmove( mes -> mtext, argv[2], strlen(argv[2]));
     }
     else
     {
         mes -> type = 0;
+        mes -> length = 8;
         memmove( mes -> mtext, "12345678", 8);
     }
     m_envoi(m, mes, 8, 0);
