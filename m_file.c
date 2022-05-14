@@ -127,7 +127,9 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
     close(fd);
     m->flags = options;
     m->file = file;
+    if (pthread_mutex_lock(&file->mutex) > 0) return -1;
     file->connecte++;
+    if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
     return m;
 }
 
@@ -167,7 +169,10 @@ int getfreespace(MESSAGE *file)
 }
 
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
-    if ((file->flags & (O_RDONLY | O_RDWR)) == 0) return -1;
+    if (!(file->flags & (O_RDONLY | O_RDWR))){
+        errno = EACCES;
+        return -1;
+    }
     if (len > file->file->len_max){
         errno = EMSGSIZE;
         return -1;
@@ -184,7 +189,6 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         }
         else{
             while (getfreespace(file) < sizeof(mon_message) + len){
-                //TODO: = à repenser
                 if( pthread_cond_wait( &file->file->wcond, &file->file->mutex) > 0 ) return -1;
             }
         }
@@ -194,46 +198,66 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[l];
-    if(*first < *last) { //assez de place sur la droite de la file, TODO: à changer *last peut changer entre temps
+    if(*first < *last) {
         memcpy(mes_addr, msg, sizeof(mon_message) + sizeof(char) * len);
     } else { //le message doit être coupé en deux
         int split = m_capacite(file)-l;
         memcpy(mes_addr, msg, split); // écriture à droite de la file
-        memcpy(&msgs, msg+split, len-split); // écriture à gauche de la file
+        memcpy(&msgs, msg+split, sizeof(mon_message) + sizeof(char) * len - split); // écriture à gauche de la file
     }
-    pthread_cond_signal(&file->file->rcond);
+    pthread_cond_broadcast(&file->file->rcond);
     printf("%d %d\n",*first, *last);
     return 0;
 }
 
-size_t m_readmsg(MESSAGE *file, void *msg, int addr){
+size_t m_lecture(MESSAGE *file, void *msg, int addr){
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
     int len = *(mes_addr+sizeof(long));
-    memcpy(msg, mes_addr+sizeof(mon_message), len);
-    memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
+    int overflow = (addr + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file); 
+    if(overflow > addr){
+        memcpy(msg, mes_addr+sizeof(mon_message), len);
+        memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
+    } else {
+        int split = m_capacite(file) - addr;
+        memcpy(msg, mes_addr, split);
+        memcpy(msg+split,&msgs[0], len-addr);
+        memset(mes_addr, 0, split);
+        memset(&msgs[0], 0, len-addr);
+    }
     return len;
 }
 
 int shiftblock(MESSAGE *file, int idx){
     char *msgs = (char *)&file->file[1];
-    int first = file->file->first;
-    size_t size = sizeof(file->file) - sizeof(FILE_MSG);
-    char tmp[size];
-    memcpy(tmp, msgs, size); // fais une copie de la file de messages courante
-    int i = first, j = first;
-    while(j != idx){
-        char *addr_src = &msgs[i];
-        size_t len = *(addr_src+sizeof(long));
+    int *first = &file->file->first;
+    int *last = &file->file->last;
+    char tmp[m_capacite(file)];
+    memcpy(tmp, msgs, m_capacite(file)); // fais une copie de la file de messages courante
+    int first_len = 0;
+    int i = *first, j = *first;
+    while(i != idx){
+        mon_message *addr_src = (mon_message*) tmp+i;
+        size_t len = addr_src->length;
+        if(i == *first){ //premiere itération
+            first_len = len;
+             *first = (*first + sizeof(mon_message) + sizeof(char) * len) %m_capacite(file);
+        }
         j = (j + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
-        char *addr_dst = &msgs[j];
-        memcpy(addr_dst, tmp+i, len);
+        if(j < i){ //il faut couper le message en 2
+
+        } else {
+
+        }
+        mon_message *addr_dst = (mon_message*) tmp+j;
+        //memset(&msgs[j], 0, len);
+        memcpy(&msgs[j], tmp+i, len);
         i = (i + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
-    return 1;
+    return first_len;
 }
 
-int m_msg_index(MESSAGE *file, long type){
+int m_addr(MESSAGE *file, long type){
     int first = file->file->first;
     int last = file->file->last;
     if(first == last) return -1;
@@ -253,32 +277,40 @@ int m_msg_index(MESSAGE *file, long type){
 }
 
 ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
+    if(!(file->flags & (O_RDONLY | O_RDWR))){
+        errno = EACCES;
+        return -1;
+    }
     if(len < m_message_len(file)){
         errno = EMSGSIZE;
         return -1;
     }
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     int idxsrc = 0; //idx du message de la file
-    if( (idxsrc = m_msg_index(file,type)) == -1){
+    if( (idxsrc = m_addr(file,type)) == -1){
         if(flags == O_NONBLOCK){
             if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
             errno = EAGAIN;
             return -1;
         } else if(flags == 0){
-            while ((idxsrc = m_msg_index(file,type)) == -1){
+            while ((idxsrc = m_addr(file,type)) == -1){
                 if( pthread_cond_wait( &file->file->rcond, &file->file->mutex) > 0 ) return -1;
             }
         }
         else return -1;
     }
-    int n = m_readmsg(file, msg, idxsrc); // copie du message dans msg
     int *first = &file->file->first;
+    printf("first: %d\n msg_addr: %d\n", *first, idxsrc);
+    int n = m_lecture(file, msg, idxsrc); // copie du message dans msg
     if(idxsrc != *first){
         //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-        //shiftblock(file, idxsrc);
+        printf("begin shift\n");
+        shiftblock(file, idxsrc);
+    } else {
+        *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
     }
-    *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
+    printf("first: %d\nlast: %d\n", file->file->first, file->file->last);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-    pthread_cond_signal(&file->file->wcond);
+    pthread_cond_broadcast(&file->file->wcond);
     return n;
 }
