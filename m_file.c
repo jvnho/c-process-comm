@@ -205,11 +205,15 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
     return 0;
 }
 
-size_t m_lecture(MESSAGE *file, void *msg, int addr){
+size_t m_lecture(MESSAGE *file, void *msg, int addr, size_t buf_len){
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
     mon_message *cast = (mon_message*) mes_addr;
     size_t len = cast->length;
+    if(len < buf_len){
+        errno = EMSGSIZE;
+        return -1;
+    }
     int overflow = (addr + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file); 
     if(overflow > addr){
         memcpy(msg, cast->mtext, len);
@@ -275,10 +279,6 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         errno = EACCES;
         return -1;
     }
-    if(len < m_message_len(file)){
-        errno = EMSGSIZE;
-        return -1;
-    }
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     int addr = 0; // adresse/offset du message de la file
     if( (addr = m_addr(file,type)) == -1){
@@ -294,7 +294,8 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         else return -1;
     }
     int *first = &file->file->first;
-    int n = m_lecture(file, msg, addr); // copie du message dans msg
+    int n = m_lecture(file, msg, addr, len); // copie du message dans msg
+    if(n == -1) return -1;
     if(addr == *first){
         *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
     } else {
