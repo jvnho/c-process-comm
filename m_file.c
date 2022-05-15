@@ -253,15 +253,11 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
 }
 
 size_t m_lecture(MESSAGE *file, void *msg, int addr, size_t buf_len){
-    if (!(file->flags & (O_RDONLY | O_RDWR))){
-        errno = EACCES;
-        return -1;
-    }
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
     mon_message *cast = (mon_message*) mes_addr;
     size_t len = cast->length;
-    if(len < buf_len){
+    if(buf_len < len){
         errno = EMSGSIZE;
         return -1;
     }
