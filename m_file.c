@@ -210,7 +210,7 @@ size_t m_lecture(MESSAGE *file, void *msg, int addr, size_t buf_len){
     char *mes_addr = &msgs[addr];
     mon_message *cast = (mon_message*) mes_addr;
     size_t len = cast->length;
-    if(len < buf_len){
+    if(buf_len < len){
         errno = EMSGSIZE;
         return -1;
     }
