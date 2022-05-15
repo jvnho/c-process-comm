@@ -234,9 +234,6 @@ int shiftblock(MESSAGE *file, int addr){
     int *last = &file->file->last;
     char tmp[m_capacite(file)];
     memcpy(tmp, msgs, m_capacite(file)); // fais une copie de la file de messages courante
-    for(int i = 0; i < m_capacite(file); i ++){
-        printf("%c", tmp[i]);
-    }
     printf("\n");
     int i = addr;
     int j = addr;
@@ -246,17 +243,15 @@ int shiftblock(MESSAGE *file, int addr){
         mon_message dst;
         memcpy(&dst, tmp+k,sizeof(mon_message));
         size_t len = dst.length;
-        printf("dst len %ld\n", len);
         if(k == addr){
             //premiere iteration, on récupère la taille du bloc qu'on veut suppriimer
             total = sizeof(mon_message) + len;
         }
         mon_message src;
-        j = (j + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        j = (k + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
         memcpy(&src, tmp+j,sizeof(mon_message));
         size_t src_len = src.length;
-        printf("src len %ld\n", src_len);
-        memcpy(&msgs[i], tmp+j, src_len);
+        memcpy(&msgs[i], tmp+j, sizeof(mon_message) * src_len);
         i = (i + sizeof(mon_message) + sizeof(char) * src_len) % m_capacite(file);
         k = (k + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
     }
