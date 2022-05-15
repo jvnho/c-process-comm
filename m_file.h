@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <signal.h>
 
 #ifndef M_FILE
 #define M_FILE
@@ -30,12 +31,24 @@ typedef struct
     int last;
     int connecte; // nombre de processus connecté à la file
     int destruction; // boolean qui dit si un processus demande la supression de la file
+    pthread_mutex_t mutex_destruction;
+    pthread_cond_t cond_destruction;
+    int nb_ergmax; // nombre maximal d'enregistrement
+    int nb_erg; // nombre d'enregistrement en cours
+    pthread_mutex_t mutex_enregistrement;
+    pthread_cond_t cond_er;
 } FILE_MSG;
 
 typedef struct {
     int flags;
     FILE_MSG *file;
 } MESSAGE;
+
+typedef struct {
+    pid_t pid;
+    long type;
+    int signal;
+} enregistrement;
 
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/);
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag);
@@ -45,5 +58,8 @@ size_t m_capacite(MESSAGE *message);
 size_t m_nb(MESSAGE *message);
 int m_deconnexion(MESSAGE *file);
 int m_destruction(const char *nom);
+int m_enregistrement(MESSAGE *file, long type ,int signal, int msgflag);
+int m_annulenr(MESSAGE *file);
+
 
 #endif
