@@ -47,19 +47,27 @@ int m_creat_file(FILE_MSG **file, int fd, int flags, size_t taille_file, size_t 
         return 0;
     memset(*file, 0, taille_file);
     if(initialiser_mutex(&(*file)->mutex) != 0
+       || initialiser_mutex(&(*file)->mutex_enregistrement) != 0
+       || initialiser_mutex(&(*file)->mutex_destruction) != 0
        || initialiser_cond(&(*file)->rcond) != 0
-       || initialiser_cond(&(*file)->wcond) != 0)
+       || initialiser_cond(&(*file)->wcond) != 0
+       || initialiser_cond(&(*file)->cond_er) != 0
+       || initialiser_cond(&(*file)->cond_destruction) != 0)
         return 0;
     (*file)->len_max = len_max;
     (*file)->max_byte = (sizeof(mon_message) + sizeof(char) * len_max) * nb_msg;
     (*file)->first = -1;
     (*file)->destruction = 0;
+    (*file)->nb_erg = 0;
     return 1;
 }
 
 MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t len_max, mode_t mode*/){
     int fd; // descripteur du fichier de mémoire partagée
     FILE_MSG *file; // file de messages
+
+    int nb_ergt = 10; // A Modifier
+
     if(nom == NULL) {
         //file anonyme
         size_t nb_msg;
@@ -71,10 +79,11 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             if(i == 1) len_max = va_arg(args, size_t);
         }
         va_end(args);
-        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg);
+        size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg) + nb_ergt * sizeof(enregistrement);
         if(!m_creat_file(&file, -1, MAP_ANONYMOUS | MAP_SHARED, taille_file, nb_msg, len_max))
             return NULL;
         options = O_RDWR;
+        file->nb_ergmax = nb_ergt;
     } else {
         int flags = O_RDWR;
         if(O_CREAT & options){
@@ -97,7 +106,8 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             if((fd = shm_open(nom, flags, mode)) == -1){
                 return NULL;
             }
-            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg);
+            size_t taille_file = sizeof(FILE_MSG) + ((sizeof(mon_message) + sizeof(char) * len_max) * nb_msg) + nb_ergt * sizeof(enregistrement);
+            //création d'une nouvelle file
             if(ftruncate(fd, taille_file) == -1)
                 return NULL;
             if(!m_creat_file(&file, fd, MAP_SHARED, taille_file, nb_msg, len_max))
@@ -112,6 +122,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
             file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
             if((void *) file == MAP_FAILED)
                 return NULL;
+            file->nb_ergmax = nb_ergt;
         }
     }
     MESSAGE *m = malloc(sizeof(MESSAGE));
@@ -134,6 +145,7 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
 int m_deconnexion(MESSAGE *file){
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     file->file->connecte--;
+    if (file->file->connecte == 0 && (pthread_cond_signal(&file->file->cond_destruction) > 0)) return -1;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     free(file);
     return 0;
@@ -147,12 +159,12 @@ int m_destruction(const char *nom){
     FILE_MSG *file = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if(file == MAP_FAILED) return -1;
     if (close(fd) == -1) return -1;
-    if (pthread_mutex_lock(&file->mutex) > 0) return -1;
+    if (pthread_mutex_lock(&file->mutex_destruction) > 0) return -1;
     file->destruction = 1;
     while (file->connecte){
-        if( pthread_cond_wait( &file->rcond, &file->mutex) > 0 ) return -1;
+        if( pthread_cond_wait( &file->cond_destruction, &file->mutex_destruction) > 0 ) return -1;
     }
-    if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
+    if (pthread_mutex_unlock(&file->mutex_destruction) > 0) return -1;
     if (shm_unlink(nom) == -1) return -1;
     return 0;
 }
@@ -165,7 +177,7 @@ int getfreespace(MESSAGE *file)
 }
 
 int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
-    if (!(file->flags & (O_RDONLY | O_RDWR))){
+    if (!(file->flags & (O_WRONLY | O_RDWR))){
         errno = EACCES;
         return -1;
     }
@@ -173,6 +185,40 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         errno = EMSGSIZE;
         return -1;
     }
+    ////// TROUVE SI IL Y A UN ENREGISTREMENT POUR CE MESSAGE
+    int res, flag = 1, signal = -1;
+    long type;
+    pid_t pid = -1;
+    memcpy(&type, msg, sizeof(long));
+    while ( flag && (res = pthread_mutex_trylock(&file->file->mutex_enregistrement)) > 0){
+        if (res == EBUSY){
+            if (msgflag == O_NONBLOCK){
+                errno = EAGAIN; // ?
+                return -1;
+            }
+            else{
+                flag = 0;
+                if (pthread_mutex_lock(&file->file->mutex_enregistrement) > 0) return -1;
+            }
+        }
+        if (res > 0) return -1;
+    }
+    char *f = (char *)file->file;
+    char *addr = f + sizeof(FILE_MSG) + file->file->max_byte;
+    enregistrement *tmp = (enregistrement *) addr;
+    for (int i = 0 ; i < file->file->nb_ergmax; i++){
+        if (tmp->pid != 0 && tmp->type == type){
+            pid = tmp->pid;
+            signal = tmp->signal;
+            memset(tmp, 0, sizeof(enregistrement));
+            i = file->file->nb_ergmax;
+            file->file->nb_erg--;
+        }
+        tmp++;
+    }
+    if ((res = pthread_mutex_unlock(&file->file->mutex_enregistrement) ) > 0 && res != EPERM) return -1;
+    if (pthread_cond_signal(&file->file->cond_er) > 0) return -1;
+
     int *first = &file->file->first;
     int *last = &file->file->last;
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
@@ -202,10 +248,15 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         memcpy(&msgs, msg+split, sizeof(mon_message) + sizeof(char) * len - split); // écriture à gauche de la file
     }
     pthread_cond_broadcast(&file->file->rcond);
+    if (pid != -1 && signal != -1) kill(pid, signal);   // ENVOIE DU SIGNAL SI IL Y A UN ENREGISTREMENT
     return 0;
 }
 
 size_t m_lecture(MESSAGE *file, void *msg, int addr, size_t buf_len){
+    if (!(file->flags & (O_RDONLY | O_RDWR))){
+        errno = EACCES;
+        return -1;
+    }
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
     mon_message *cast = (mon_message*) mes_addr;
@@ -304,4 +355,53 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
     pthread_cond_broadcast(&file->file->wcond);
     return n;
+}
+
+int m_enregistrement(MESSAGE *file, long type ,int signal, int msgflag){
+    if (pthread_mutex_lock(&file->file->mutex_enregistrement) > 0) return -1;
+    if (file->file->nb_erg == file->file->nb_ergmax){
+        if (msgflag !=  0){
+            pthread_mutex_unlock(&file->file->mutex);
+            if (msgflag == O_NONBLOCK) errno = EAGAIN;
+            return -1;
+        }
+        else{
+            while (file->file->nb_erg == file->file->nb_ergmax){
+                if( pthread_cond_wait( &file->file->cond_er, &file->file->mutex_enregistrement) > 0 ) return -1;
+            }
+        }
+    }
+    enregistrement er = {getpid(), type, signal};
+    char *f = (char *)file->file;
+    char *addr = f + sizeof(FILE_MSG) + file->file->max_byte;
+    enregistrement *tmp = (enregistrement *) addr;
+    for (int i = 0 ; i < file->file->nb_ergmax; i++){
+        if (tmp -> pid == 0){
+            i = file->file->nb_ergmax;
+            memcpy(tmp, &er, sizeof(enregistrement));
+        }
+        tmp++;
+    }
+    file->file->nb_erg++;
+    if (pthread_mutex_unlock(&file->file->mutex_enregistrement) == -1) return -1;
+    return 0;
+}
+
+int m_annulenr(MESSAGE *file){
+    pid_t pid = getpid();
+    char *f = (char *)file->file;
+    char *addr = f + sizeof(FILE_MSG) + file->file->max_byte;
+    enregistrement *tmp = (enregistrement *) addr;
+    if (pthread_mutex_lock(&file->file->mutex_enregistrement) > 0) return -1;
+    for (size_t i = 0; i < file->file->nb_ergmax; i++){
+        if (tmp -> pid == pid){
+            memset(tmp, 0, file->file->nb_ergmax * sizeof(enregistrement));
+            i = file->file->nb_ergmax;
+        }
+        tmp++;
+    }
+    file->file->nb_erg--;
+    if (pthread_mutex_unlock(&file->file->mutex_enregistrement) > 0) return -1;
+    if (pthread_cond_signal(&file->file->cond_er) > 0) return -1;
+    return 0;
 }
