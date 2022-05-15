@@ -127,9 +127,14 @@ MESSAGE *m_connexion(const char *nom, int options,.../*, size_t nb_msg, size_t l
     close(fd);
     m->flags = options;
     m->file = file;
-    if (pthread_mutex_lock(&file->mutex) > 0) return -1;
-    file->connecte++;
-    if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
+    if (pthread_mutex_lock(&file->mutex) > 0) return NULL;
+    if(file->destruction){
+        //un processus a fait une demande de destruction de la file on annule la connexion
+        free(file);
+    } else {
+        file->connecte++;
+    }
+    if (pthread_mutex_unlock(&file->mutex) > 0) return NULL;
     return m;
 }
 
@@ -137,7 +142,6 @@ int m_deconnexion(MESSAGE *file){
     if (pthread_mutex_lock(&file->file->mutex) > 0) return -1;
     file->file->connecte--;
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
-    // munmap ?
     free(file);
     return 0;
 }
@@ -157,7 +161,6 @@ int m_destruction(const char *nom){
     }
     if (pthread_mutex_unlock(&file->mutex) > 0) return -1;
     if (shm_unlink(nom) == -1) return -1;
-    free(file); // munmap ?
     return 0;
 }
 
@@ -206,66 +209,70 @@ int m_envoi(MESSAGE *file, const void *msg, size_t len, int msgflag){
         memcpy(&msgs, msg+split, sizeof(mon_message) + sizeof(char) * len - split); // écriture à gauche de la file
     }
     pthread_cond_broadcast(&file->file->rcond);
-    printf("%d %d\n",*first, *last);
     return 0;
 }
 
 size_t m_lecture(MESSAGE *file, void *msg, int addr){
     char *msgs = (char *)&file->file[1];
     char *mes_addr = &msgs[addr];
-    int len = *(mes_addr+sizeof(long));
+    mon_message *cast = (mon_message*) mes_addr;
+    size_t len = cast->length;
     int overflow = (addr + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file); 
     if(overflow > addr){
-        memcpy(msg, mes_addr+sizeof(mon_message), len);
-        memset(mes_addr, 0, sizeof(mon_message) + sizeof(char)*len); //supprime le message de la file en remplissant la zone d'octets nuls
+        memcpy(msg, cast->mtext, len);
     } else {
         int split = m_capacite(file) - addr;
         memcpy(msg, mes_addr, split);
         memcpy(msg+split,&msgs[0], len-addr);
-        memset(mes_addr, 0, split);
-        memset(&msgs[0], 0, len-addr);
     }
     return len;
 }
 
-int shiftblock(MESSAGE *file, int idx){
+int shiftblock(MESSAGE *file, int addr){
     char *msgs = (char *)&file->file[1];
     int *first = &file->file->first;
     int *last = &file->file->last;
     char tmp[m_capacite(file)];
     memcpy(tmp, msgs, m_capacite(file)); // fais une copie de la file de messages courante
-    int first_len = 0;
-    int i = *first, j = *first;
-    while(i != idx){
-        mon_message *addr_src = (mon_message*) tmp+i;
-        size_t len = addr_src->length;
-        if(i == *first){ //premiere itération
-            first_len = len;
-             *first = (*first + sizeof(mon_message) + sizeof(char) * len) %m_capacite(file);
-        }
-        j = (j + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
-        if(j < i){ //il faut couper le message en 2
-
-        } else {
-
-        }
-        mon_message *addr_dst = (mon_message*) tmp+j;
-        //memset(&msgs[j], 0, len);
-        memcpy(&msgs[j], tmp+i, len);
-        i = (i + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+    for(int i = 0; i < m_capacite(file); i ++){
+        printf("%c", tmp[i]);
     }
-    return first_len;
+    printf("\n");
+    int i = addr;
+    int j = addr;
+    int k = addr;
+    size_t total = 0;
+    while(k != *last){
+        mon_message dst;
+        memcpy(&dst, tmp+k,sizeof(mon_message));
+        size_t len = dst.length;
+        printf("dst len %ld\n", len);
+        if(k == addr){
+            //premiere iteration, on récupère la taille du bloc qu'on veut suppriimer
+            total = sizeof(mon_message) + len;
+        }
+        mon_message src;
+        j = (j + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+        memcpy(&src, tmp+j,sizeof(mon_message));
+        size_t src_len = src.length;
+        printf("src len %ld\n", src_len);
+        memcpy(&msgs[i], tmp+j, src_len);
+        i = (i + sizeof(mon_message) + sizeof(char) * src_len) % m_capacite(file);
+        k = (k + sizeof(mon_message) + sizeof(char) * len) % m_capacite(file);
+    }
+    *last = *last - total;
+    return 0;
 }
 
 int m_addr(MESSAGE *file, long type){
-    int first = file->file->first;
-    int last = file->file->last;
-    if(first == last) return -1;
+    int *first = &file->file->first;
+    int *last = &file->file->last;
+    if(*first == *last) return -1;
     if(m_nb(file) == 0) return -1;
-    if(type == 0) return first;
     char *msgs = (char *)&file->file[1];
-    int i = first;
-    while(i != last){
+    if(type == 0) return *first;
+    int i = *first;
+    while(i != *last){
         mon_message *msg_addr = (mon_message*) &msgs[i];
         long msg_type = msg_addr->type;
         size_t len = msg_addr->length;
@@ -300,14 +307,11 @@ ssize_t m_reception(MESSAGE *file, void *msg, size_t len, long type, int flags){
         else return -1;
     }
     int *first = &file->file->first;
-    printf("first: %d\n msg_addr: %d\n", *first, idxsrc);
     int n = m_lecture(file, msg, idxsrc); // copie du message dans msg
-    if(idxsrc != *first){
-        //cas où il faut décaler la mémoire car on a pop un élément au milieu de la liste
-        printf("begin shift\n");
-        shiftblock(file, idxsrc);
-    } else {
+    if(idxsrc == *first){
         *first = (*first + sizeof(mon_message) + sizeof(char) * n) %m_capacite(file);
+    } else {
+        shiftblock(file,idxsrc);
     }
     printf("first: %d\nlast: %d\n", file->file->first, file->file->last);
     if (pthread_mutex_unlock(&file->file->mutex) > 0) return -1;
